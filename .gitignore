@@ -1,0 +1,10 @@
+node_modules/
+spike/reference/
+spike/artifacts/
+research_notes/
+reports/
+docs/specs/
+__pycache__/
+.DS_Store
+.env
+.env.*
