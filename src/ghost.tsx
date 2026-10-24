@@ -1,4 +1,5 @@
-import type { CliRenderer, EditBufferRenderable, OptimizedBuffer, RGBA } from "@opentui/core"
+import { TextRenderable } from "@opentui/core"
+import type { CliRenderer, EditBufferRenderable, RGBA, Renderable } from "@opentui/core"
 
 export type PromptEditor = EditBufferRenderable
 
@@ -24,8 +25,9 @@ export function createGhost(options: {
 }) {
   const dismissed = new WeakMap<PromptEditor, string>()
   let disposed = false
+  let attached: { editor: PromptEditor; parent: Renderable; preview: TextRenderable; text: string; ready: boolean } | undefined
 
-  function current() {
+  function current(checkOcclusion = true) {
     if (disposed || !options.enabled()) return
     const editor = promptEditor(options.renderer)
     if (!editor || !editor.focused || !editor.visible || editor.hasSelection()) return
@@ -42,25 +44,62 @@ export function createGhost(options: {
     if (!suggestion.startsWith(text) || suggestion.length <= text.length) return
     const visual = editor.visualCursor
     if (visual.visualCol >= editor.width || visual.visualRow >= editor.height) return
+    const x = editor.x + visual.visualCol
+    const y = editor.y + visual.visualRow
+    const end = Math.min(editor.x + editor.width, options.renderer.width)
+    if (x < 0 || y < 0 || y >= options.renderer.height || x >= end) return
+    // Check the completed frame before accepting text: overlays can begin after
+    // the cursor. The preview shares its editor's scene parent, not a global painter.
+    if (checkOcclusion) {
+      if (attached?.editor !== editor || !attached.ready || !attached.preview.visible) return
+      for (let col = x; col < end; col++) {
+        const owner = options.renderer.hitTest(col, y)
+        if (owner !== editor.num && !(attached?.editor === editor && owner === attached.preview.num)) return
+      }
+    }
     return { editor, suffix: suggestion.slice(text.length), text, visual }
   }
 
-  function draw(buffer: OptimizedBuffer) {
-    const state = current()
-    if (!state) return
-    const x = state.editor.x + state.visual.visualCol
-    const y = state.editor.y + state.visual.visualRow
-    const width = Math.min(state.editor.width - state.visual.visualCol, buffer.width - x)
-    if (x < 0 || y < 0 || y >= buffer.height || width <= 0) return
-    // Clip to the input's current visual row. Never paint over chrome/other panes.
-    // Empty prompts have a host placeholder; erase only that input row.
-    buffer.pushScissorRect(x, y, width, 1)
-    buffer.fillRect(x, y, width, 1, options.background)
-    buffer.drawText(state.suffix.split(/\r?\n/, 1)[0]!, x, y, options.color, options.background)
-    buffer.popScissorRect()
+  function detach() {
+    if (!attached) return
+    if (!attached.preview.isDestroyed) attached.preview.destroy()
+    attached = undefined
   }
-
-  options.renderer.addPostProcessFn(draw)
+  function observe(afterLayout = false) {
+    const editor = promptEditor(options.renderer)
+    if (attached?.editor !== editor || attached?.parent !== editor?.parent) detach()
+    if (disposed || !editor?.parent) return
+    if (!attached) {
+      const preview = new TextRenderable(options.renderer, {
+        position: "absolute", left: 0, top: 0, width: 1, height: 1,
+        fg: options.color, bg: options.background, wrapMode: "none",
+        selectable: false, visible: false, zIndex: editor.zIndex,
+      })
+      editor.parent.add(preview)
+      attached = { editor, parent: editor.parent, preview, text: "", ready: false }
+    }
+    if (afterLayout) attached.ready = true
+    const state = current(false)
+    const preview = attached.preview
+    preview.visible = !!state && attached.ready
+    if (!state) return
+    preview.left = state.editor.x - attached.parent.x + state.visual.visualCol
+    preview.top = state.editor.y - attached.parent.y + state.visual.visualRow
+    preview.zIndex = state.editor.zIndex
+    preview.width = state.editor.width - state.visual.visualCol
+    const text = state.suffix.split(/\r?\n/, 1)[0]!
+    if (attached.text !== text) {
+      preview.content = text
+      attached.text = text
+    }
+  }
+  const beforeFrame = async () => observe()
+  const afterFrame = () => observe(true)
+  observe()
+  options.renderer.setFrameCallback(beforeFrame)
+  // Recheck layout after resize. This only updates a scene node for the next
+  // frame; it never writes onto the fully composed buffer.
+  options.renderer.addPostProcessFn(afterFrame)
   options.renderer.requestRender()
 
   return {
@@ -86,7 +125,9 @@ export function createGhost(options: {
     },
     dispose() {
       disposed = true
-      options.renderer.removePostProcessFn(draw)
+      options.renderer.removePostProcessFn(afterFrame)
+      options.renderer.removeFrameCallback(beforeFrame)
+      detach()
       options.renderer.requestRender()
     },
   }

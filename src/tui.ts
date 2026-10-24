@@ -1,5 +1,5 @@
 import { Plugin } from "@opencode/plugin/tui"
-import { createGhost, promptEditor } from "./ghost"
+import { createGhost, promptEditor } from "./ghost.tsx"
 import { appendFileSync } from "node:fs"
 import { createEffect, createRoot } from "solid-js"
 import { cleanPrediction, conversation, createPredictor, DEFAULT_MODEL, parseModel, predictionPrompt } from "./prediction"

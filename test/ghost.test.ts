@@ -1,16 +1,16 @@
 import { afterEach, expect, test } from "bun:test"
 import { BoxRenderable, RGBA, TextareaRenderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
-import { createGhost } from "../src/ghost"
+import { createGhost } from "../src/ghost.tsx"
 import { wordCompletion } from "../src/word"
 
 const cleanups: (() => void)[] = []
 afterEach(() => cleanups.splice(0).reverse().forEach((cleanup) => cleanup()))
 
-async function setup(suggestion = "Run the tests and fix any failures.", width = 60) {
+async function setup(suggestion = "Run the tests and fix any failures.", width = 60, padding = 0) {
   const term = await createTestRenderer({ width, height: 10 })
   cleanups.push(() => term.renderer.destroy())
-  const box = new BoxRenderable(term.renderer, { left: 3, top: 2, width: "100%", height: 4 })
+  const box = new BoxRenderable(term.renderer, { left: 3, top: 2, width: "100%", height: 4 + padding * 2, padding })
   term.renderer.root.add(box)
   const editor = new TextareaRenderable(term.renderer, {
     width: width - 6, height: 2, placeholder: "Ask anything — placeholder", wrapMode: "char",
@@ -27,6 +27,7 @@ async function setup(suggestion = "Run the tests and fix any failures.", width =
   })
   cleanups.push(ghost.dispose)
   await term.renderOnce()
+  await term.renderOnce() // preview waits for the first completed editor layout
   return { ...term, editor, ghost, disable: () => { enabled = false } }
 }
 
@@ -133,6 +134,60 @@ test("managed textarea suspension must not suppress ghost text", async () => {
   expect(t.editor.plainText).toBe("Run the tests and fix any failures.")
 })
 
+test("postprocessing must respect UI covering any part of the editor row", async () => {
+  const t = await setup()
+  const overlay = new BoxRenderable(t.renderer, {
+    position: "absolute", left: t.editor.x + 8, top: t.editor.y,
+    width: 20, height: 1, zIndex: 2000, backgroundColor: "#bd93f9",
+  })
+  t.renderer.root.add(overlay)
+  await t.renderOnce()
+  expect(t.ghost.available()).toBe(false)
+  expect(t.ghost.accept()).toBe(false)
+  expect(t.editor.plainText).toBe("")
+  const painted = t.captureSpans().lines[t.editor.y]?.spans ?? []
+  expect(painted.some((span) => span.bg.equals(RGBA.fromHex("#bd93f9")))).toBe(true)
+  expect(t.captureCharFrame()).not.toContain("Run the tests")
+  overlay.visible = false
+  await t.renderOnce()
+  expect(t.ghost.available()).toBe(true)
+  expect(t.captureCharFrame()).toContain("Run the tests")
+})
+
+test("a fully covered editor never accepts hidden ghost text", async () => {
+  const t = await setup()
+  t.editor.setText("Run")
+  t.editor.gotoBufferEnd()
+  const overlay = new BoxRenderable(t.renderer, {
+    position: "absolute", left: t.editor.x, top: t.editor.y,
+    width: t.editor.width, height: t.editor.height,
+    zIndex: 3000, backgroundColor: "#123456",
+  })
+  t.renderer.root.add(overlay)
+  await t.renderOnce()
+  expect(t.ghost.available()).toBe(false)
+  expect(t.ghost.accept()).toBe(false)
+  expect(t.editor.plainText).toBe("Run")
+  overlay.destroy()
+  await t.renderOnce()
+  expect(t.ghost.available()).toBe(true)
+  t.ghost.accept()
+  expect(t.editor.plainText).toBe("Run the tests and fix any failures.")
+})
+
+test("scene preview aligns with an editor in a padded parent and is removed on disposal", async () => {
+  const t = await setup("Run the tests and fix any failures.", 60, 1)
+  const row = t.captureCharFrame().split("\n")[t.editor.y]!
+  expect(row.indexOf("Run the tests")).toBe(t.editor.x)
+  const parent = t.editor.parent!
+  expect(parent.getChildrenCount()).toBe(2)
+  t.ghost.dispose()
+  expect(parent.getChildrenCount()).toBe(1)
+  await t.renderOnce()
+  expect(t.captureCharFrame()).toContain("placeholder")
+  expect(t.editor.plainText).toBe("")
+})
+
 test("word preview inserts only the missing word suffix and reports previous draft", async () => {
   const t = await setup("")
   t.ghost.dispose()
@@ -147,6 +202,7 @@ test("word preview inserts only the missing word suffix and reports previous dra
     accepted: (draft) => { accepted = draft },
   })
   cleanups.push(word.dispose)
+  await t.renderOnce()
   await t.renderOnce()
   expect(t.captureCharFrame()).toContain("Add regression")
   expect(t.editor.plainText).toBe("Add reg")
