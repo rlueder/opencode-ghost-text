@@ -3,6 +3,9 @@
 Inline AI suggestions for the OpenCode terminal: a full prompt when the field is empty, or the next word while you type. **Tab** accepts; **Escape** dismisses. Suggestions are never submitted automatically.
 
 Experimental. Tested with **OpenCode 2.0.25 / OpenTUI 0.5.16**.
+The scene preview also has a cross-plugin rendering test against OpenTUI 0.6.8
+and has loaded successfully in OpenCode 2.1.3. Live model behavior is separate
+from these rendering checks.
 
 ## Installation
 
@@ -65,6 +68,7 @@ Other options: `wordPrediction` (default `true`), `timeoutMs` (10000 per model),
 - Uses OpenCode's model infrastructure; no prediction agent sessions or tools are created.
 - Sends bounded chat text (up to six messages / 6000 characters) and, for typed completion, your draft (up to 2000 characters). Typed mode excludes assistant text. Pasted secrets are **not** redacted.
 - Predictions can be wrong. Preview is clipped to the current row; IME, accessibility, and other OpenCode versions are not fully verified.
+- Preview text shares the editor's normal scene layer, so notifications and dialogs paint above it. Tab cannot accept a suggestion while any part of its row is covered. It becomes available again after the covering UI closes.
 - Cancellation discards stale suggestions but cannot guarantee provider inference or billing stops immediately. Output validation is not a backend token limit.
 
 ## Development
